@@ -2,6 +2,10 @@
 
 This is a step-by-step guide on how to execute the [Rockset Quickstart](https://docs.rockset.com/documentation/docs/quickstart) using the Python client. This Quickstart involves creating Film Releases and Film Ratings collections from a public S3 bucket and then executing queries to get recommended movies based on a specified genre and rating value.
 
+You can copy the full Pythons script without step-by-step descriptions via the attached `python-script` file.
+
+Link to recipe on Rockset website: https://docs.rockset.com/documentation/recipes/quickstart-10-min
+
 ## Requirements
 - Python >= 3.6
 - `pip install rockset` or `pip3 install rockset`

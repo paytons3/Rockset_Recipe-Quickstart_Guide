@@ -132,6 +132,28 @@ create_collection(rs, workspaceName, movieReleasesCollectionName, movieReleasesP
 create_collection(rs, workspaceName, movieRatingsCollectionName, movieRatingsPrefix, filmRatingsIngestTransformation)
 ```
 
+### Wait for collections to be ready
+
+Before we can execute queries, we will need to wait for the collections to be in the `READY` state. It will only take ~1 minute to ingest all the movie data from the public S3 buckets.
+
+```
+def wait_for_collection_ready(rs, workspaceName, collectionName, max_attempts=30):
+    print(f"Waiting for the `{collectionName}` collection to be `Ready` (~1 minute)...")
+    for attempt in range(max_attempts):
+        api_response = rs.Collections.get(collection=collectionName, workspace=workspaceName)
+
+        if api_response.data.status == 'READY':
+            print(f"Collection `{collectionName}` ready!")
+            break
+        else:
+            time.sleep(60)
+```
+
+```
+wait_for_collection_ready(rs, workspaceName, movieReleasesCollectionName)
+wait_for_collection_ready(rs, workspaceName, movieRatingsCollectionName)
+```
+
 ## Step 7: Movie Suggestions Query
 
 ### Define Query

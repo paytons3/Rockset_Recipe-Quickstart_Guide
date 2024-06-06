@@ -104,7 +104,7 @@ create_workspace(rs, workspaceName)
 
 ## Step 6: Create Collections
 
-Next, we'll create a `Film Releases` [Collection](https://docs.rockset.com/documentation/docs/collections) and a `Film Ratings` Collection from a public S3 bucket. We'll then pass our ingest transformations from the previous steps into the field_mapping_query.
+Next, we'll create a `Film Releases` [Collection](https://docs.rockset.com/documentation/docs/collections) and a `Film Ratings` Collection from a public S3 bucket. We'll then pass our ingest transformations from Step 4 into the `field_mapping_query` parameters.
 
 ```
 def create_collection(rs, workspaceName, collectionName, sourcePrefix, ingest_transformation_query):

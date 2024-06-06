@@ -1,0 +1,235 @@
+from rockset import *
+from rockset.models import *
+import time
+import json
+import os
+
+# Initialize the client 
+# Set the API Key as an environmental variable in the shell via:
+# export ROCKET_API_KEY='<insert key here>'
+rocksetApiKey = os.getenv("ROCKSET_API_KEY")
+apiServerHost = Regions.YOUR_REGION_HERE #ex: Regions.usw2a1
+
+rs = RocksetClient(host=apiServerHost, api_key=rocksetApiKey)
+
+# Define Workspace name
+workspaceName = 'movies'
+
+# Define Collection names
+movieReleasesCollectionName = 'film_releases'
+movieRatingsCollectionName = 'film_ratings'
+
+# Define prefixes for public S3 bucksets when creating Collections
+movieReleasesPrefix = 'movies'
+movieRatingsPrefix = 'movie-ratings'
+
+# Define ingest transformation queries
+# 1) Ingest transformation for film_releases Collection
+filmReleasesIngestTransformation = """
+    SELECT
+        _input._meta,
+        NULLIF(_input.belongs_to_collection, '') AS belongs_to_collection,
+        _input.genres,
+        NULLIF(_input.homepage, '') AS homepage,
+        TRY_CAST(_input.id AS int) AS id,
+        _input.original_language,
+        _input.overview,
+        _input.popularity,
+        _input.production_companies,
+        CAST(_input.release_date AS date) AS release_date,
+        _input.revenue,
+        _input.runtime,
+        _input.title,
+        _input.vote_average,
+        _input.vote_count
+    FROM
+        _input;
+    """
+# 2) Ingest transformation for film_ratings Collection
+filmRatingsIngestTransformation = """
+    SELECT
+        _meta,
+        TRY_CAST(_input.movieId AS int) AS movie_id,
+        _input.rating,
+        TRY_CAST(userId AS int) AS user_id
+    FROM
+        _input;
+    """
+
+# Define queries for getting movie recommendations with and without using parameters.
+# 1) Without parameters
+movie_suggestions_query = f"""
+SELECT
+    m.id,
+    m.title
+FROM
+    {workspaceName}.{movieReleasesCollectionName} m,
+    UNNEST(m.genres) as genres
+WHERE
+    genres.name = 'Action'
+    AND m.id NOT IN (
+        SELECT
+            r.movie_id
+        FROM
+            {workspaceName}.{movieRatingsCollectionName} r
+        WHERE
+            r.user_id = 100
+    )
+ORDER BY
+    m.popularity DESC;
+"""
+# 2) Query with parameters
+parameters=[
+    QueryParameter(
+                name="genre",
+                type="string",
+                value="Action",
+            ),
+    QueryParameter(
+                name="user_id",
+                type="int",
+                value="100",
+            )
+]
+
+movie_suggestions_parameters_query = f"""
+SELECT
+    m.id,
+    m.title
+FROM
+    {workspaceName}.{movieReleasesCollectionName} m,
+    UNNEST(m.genres) as genres
+WHERE
+    genres.name = :genre
+    AND m.id NOT IN (
+        SELECT
+            r.movie_id
+        FROM
+            {workspaceName}.{movieRatingsCollectionName} r
+        WHERE
+            r.user_id = :user_id
+    )
+ORDER BY
+    m.popularity DESC;
+"""
+
+# Define necessary functions
+
+def create_workspace(rs, workspaceName):
+    try:
+        print(f"Creating workspace `{workspaceName}`...")
+        api_response = rs.Workspaces.create(
+            name=workspaceName,
+        )
+    except ApiException as e:
+        print("Exception when creating workspace: %s\n" % json.loads(e.body))
+
+def create_collection(rs, workspaceName, collectionName, sourcePrefix, ingest_transformation_query):
+    try:
+        print(f"Creating collection `{collectionName}`...")
+        api_response = rs.Collections.create_s3_collection(
+            field_mapping_query=FieldMappingQuery(
+                sql=ingest_transformation_query,
+            ),
+            name=collectionName,
+            workspace=workspaceName,
+            sources=[
+                S3SourceWrapper(
+                    bucket="s3://rockset-public-datasets",
+                    prefix=sourcePrefix,
+                    region="us-west-2",
+                ),
+            ]
+        )
+    except ApiException as e:
+        print("Exception when creating collection: %s\n" % json.loads(e.body))
+    
+def wait_for_collection_ready(rs, workspaceName, collectionName, max_attempts=30):
+    print(f"Waiting for the `{collectionName}` collection to be `Ready` (~1 minute)...")
+    for attempt in range(max_attempts):
+        api_response = rs.Collections.get(collection=collectionName, workspace=workspaceName)
+
+        if api_response.data.status == 'READY':
+            print(f"Collection `{collectionName}` ready!")
+            break
+        else:
+            time.sleep(60)
+    
+def execute_query(rs, sqlQuery, parameters=None):
+    api_response = rs.Queries.query(
+        sql=QueryRequestSql(
+        parameters=parameters,
+        query=sqlQuery
+        )
+    )
+    print(api_response)
+
+def clean_up_demo(rs, workspaceName, collectionNames, max_attempts=10):
+
+    # Deleting Collections
+    for collectionName in collectionNames:
+        try:
+            print(f"Deleting collection `{collectionName}`...")
+            api_response = rs.Collections.delete(
+                collection=collectionName, 
+                workspace=workspaceName
+            )
+        except ApiException as e:
+            print(f"Exception when deleting collection: %s\n" % json.loads(e.body))
+    # Checking if Collection is deleted
+    for collectionName in collectionNames:
+        for attempt in range(max_attempts):
+            try:
+                api_response = rs.Collections.get(
+                    collection=collectionName, 
+                    workspace=workspaceName
+                )
+            except ApiException as e:
+                if json.loads(e.body).get("message_key") == "COLLECTION_DOES_NOT_EXIST": 
+                    print(f"Collection `{collectionName}` deleted.")
+                    break
+            time.sleep(30)
+
+    # Deleting Workspace
+    try:
+        print(f"Deleting workspace `{workspaceName}`...")
+        api_response = rs.Workspaces.delete(
+            workspace=workspaceName
+        )
+        # Checking if Workspace is deleted
+        for attempt in range(max_attempts):
+            try:
+                api_response = rs.Workspaces.get(
+                    workspace=workspaceName
+                )
+            except ApiException as e:
+                if json.loads(e.body).get("message_key") == "WORKSPACE_NOT_FOUND": 
+                    print(f"Workspaces `{workspaceName}` deleted.")
+                    break
+            time.sleep(30)
+    except ApiException as e:
+        print(f"Exception when deleting workspace: %s\n" % json.loads(e.body))
+
+# Excecute once to set-up enviornment
+create_workspace(rs, workspaceName)
+
+# Create Film Releases Collection
+create_collection(rs, workspaceName, movieReleasesCollectionName, movieReleasesPrefix, filmReleasesIngestTransformation)
+
+# Create Film Ratings Collection
+create_collection(rs, workspaceName, movieRatingsCollectionName, movieRatingsPrefix, filmRatingsIngestTransformation)
+
+# Wait for Collections to be ready before proceeding
+wait_for_collection_ready(rs, workspaceName, movieReleasesCollectionName)
+wait_for_collection_ready(rs, workspaceName, movieRatingsCollectionName)
+
+# Excecute below queries as mamy times as you'd like
+
+# Movie suggestions query
+execute_query(rs, movie_suggestions_query)
+
+# Movie suggestions query with parameters
+execute_query(rs, movie_suggestions_parameters_query, parameters)
+
+# Uncomment to delete the workspace and collections that were created
+#clean_up_demo(rs, workspaceName, [movieReleasesCollectionName, movieRatingsCollectionName])
